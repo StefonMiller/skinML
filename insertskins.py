@@ -1,7 +1,6 @@
 import numpy as np
 from PIL import Image
-from matplotlib import colors
-from scipy.spatial import cKDTree as KDTree
+import cv2
 import mysql.connector
 import pyotp
 import requests
@@ -10,6 +9,7 @@ from bs4 import BeautifulSoup
 from requests import get
 from io import BytesIO
 import time
+import imgtest
 from datetime import datetime
 
 # Class containing information on each skin
@@ -28,25 +28,6 @@ class Skin:
         self.t = ''
         self.rd = ''
 
-    # Getters/setters for various info needed later
-    def get_name(self):
-        return self.n
-
-    def get_link(self):
-        return self.l
-
-    def get_init_price(self):
-        return self.ip
-
-    def get_curr_price(self):
-        return self.cp
-
-    def get_type(self):
-        return self.t
-
-    def get_release_date(self):
-        return self.rd
-
     def set_link(self, link):
         self.l = link
 
@@ -60,6 +41,8 @@ class Skin:
         end_date = datetime.date(datetime.now())
         self.rd = (end_date - start_date).days
 
+
+
 # Prevent anything from running when imported
 def main():
     pass
@@ -67,6 +50,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 # Convenience method to eliminate boilerplate code used to get html
 def get_html(url):
@@ -83,12 +67,13 @@ def get_html(url):
     except Exception as e:
         print('Connection failed: ' + str(e))
 
+
 # Initialize the list of skins with info from BitSkins API. This will populate the items with their names and current
 # prices
 # @Return: A list of Skin objects
 def init_skins():
     # Open the text file containing my bitskins API key and secret
-    with open('C:/Users/Stefon/PycharmProjects/skinml/bitskins.txt') as f:
+    with open('/skinml/bitskins.txt') as f:
         bit_info = f.read().splitlines()
         api_key = bit_info[0]
         secret = bit_info[1]
@@ -107,12 +92,13 @@ def init_skins():
 
     return items
 
+
 # Fills out any remaining info for all skins passed in
 # @Param items: A list of Skin objects
 # @Return: A list of Skin objects with all info filled out
 def complete_skins(items):
     # Get the server info from the text file
-    with open('C:/Users/Stefon/PycharmProjects/skinml/serverinfo.txt') as f:
+    with open('/skinml/serverinfo.txt') as f:
         info = f.read().splitlines()
         f.close()
 
@@ -154,48 +140,19 @@ def complete_skins(items):
     # Once we complete filling out the item's data, return the completed list
     return items
 
+
 # Takes completed list of Skin objects and writes their image data along with price data to the csv file
 # @Param items: List of completed list of Skin objects
 # @Return: Status code of operation
-def write_skin(items, all_colors):
-    if not all_colors:
-        use_colors = {k: colors.cnames[k] for k in ['red', 'green', 'blue', 'black', 'yellow', 'purple']}
-    else:
-        use_colors = colors.cnames
-
-    # translate hexstring to RGB tuple
-    named_colors = {k: tuple(map(int, (v[1:3], v[3:5], v[5:7]), 3 * (16,)))
-                    for k, v in use_colors.items()}
-    ncol = len(named_colors)
-
-    if not all_colors:
-        ncol -= 1
-        no_match = named_colors.pop('purple')
-    else:
-        no_match = named_colors['purple']
-
-    # make an array containing the RGB values
-    color_tuples = list(named_colors.values())
-    color_tuples.append(no_match)
-    color_tuples = np.array(color_tuples)
-
-    color_names = list(named_colors)
-    color_names.append('no match')
-
-    # build tree
-    tree = KDTree(color_tuples[:-1])
-    # tolerance for color match `inf` means use best match no matter how
-    # bad it may be
-    tolerance = np.inf
-    # find closest color in tree for each pixel in picture
-
+def write_skin(items):
     # Write csv header
-    with open('C:/Users/Stefon/PycharmProjects/skinml/skindata.csv', "w") as f:
-        list_colors = color_names
-        list_colors.append('skin_type')
+    with open('skindata.csv', "w") as f:
+        list_colors = imgtest.get_colors()
+        list_colors.append('no match')
         list_colors.append('initial_price')
         list_colors.append('curr_price')
         list_colors.append('days_since_release')
+        list_colors.append('skin_type')
         list_colors = ','.join(list_colors)
         f.write(list_colors)
         f.write('\n')
@@ -203,7 +160,7 @@ def write_skin(items, all_colors):
 
     # count and reattach names
     for item in items:
-        if item.l == '' or item.ip == 0 or item.t == '':
+        if item.l == '' or item.ip == 0:
             print('\t' + item.n + ' has no data, skipping...')
         else:
             try:
@@ -240,31 +197,27 @@ def write_skin(items, all_colors):
                         img_response = requests.get(item_img)
                     print('\t\tCooldown expired, reconnecting...')
 
-                # Once we get the image, load it into a np array
-                img = Image.open(BytesIO(img_response.content))
-                img = img.convert('RGB')
-                img = np.array(img)
-
-                # find closest color in tree for each pixel in picture
-                dist, idx = tree.query(img, distance_upper_bound=tolerance)
-
-                counts = dict(zip(color_names, np.bincount(idx.ravel(), None, ncol + 1)))
-                count_vals = list(counts.values())
-                count_vals = [str(i) for i in count_vals]
-                # After we get all of the image data into the list, append the item's type, current price, and
-                # initial price and then output it to the csv
-                count_vals.append(item.t)
+                count_vals = []
+                dominant_colors = imgtest.load_image(img_response)
+                for color in dominant_colors:
+                    count_vals.append(str(dominant_colors[color]))
                 count_vals.append(str(item.ip))
                 count_vals.append(str(item.cp))
                 count_vals.append(str(item.rd))
+                count_vals.append(str(item.t))
+
+                # After we get all of the image data into the list, append the item's type, current price, and
+                # initial price and then output it to the csv
                 counts = ','.join(count_vals)
 
-                with open('C:/Users/Stefon/PycharmProjects/skinml/skindata.csv', "a") as f:
+                with open('skindata.csv', "a") as f:
                     f.write(counts)
                     f.write('\n')
             except Exception as e:
                 print('\tSkipping ' + item.n + '\n' + str(e))
+            print('Successfully inserted ' + item.n)
             time.sleep(10)
+
 
 def insert():
     skins = init_skins()
@@ -275,7 +228,5 @@ def insert():
         return final_skins
 
     print('Successfully got skin list, writing to file...')
-    write_skin(final_skins, False)
+    write_skin(final_skins)
     return 1
-
-

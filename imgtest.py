@@ -1,79 +1,84 @@
-import requests
 import cv2
+import requests
 import numpy as np
-from sklearn.cluster import KMeans
+from matplotlib import colors
+from scipy.spatial import cKDTree as KDTree
+from scipy.misc import face
+from skimage import io
+from PIL import Image
+from io import BytesIO
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# Class containing image color data
-# r: red pixel value
-# g: green pixel value
-# b: blue pixel value
-# c: number of pixels in the image with this color
-# p: percentage of pixels in the image that are this color
-class ImgColor:
-    def __init__(self, colors, count, percent):
-        self.r = colors[0]
-        self.g = colors[1]
-        self.b = colors[2]
-        self.c = count
-        self.p = percent
-
-
-# Loads image located at url and get the dominant colors of that image
-# @Param img_response: Response from a request to the image's url
-# @Param num_colors: How many clusters to use in KMeans
-# @Return: A list of ImgColor objects
-def load_image(img_response, num_colors):
-    # Get raw response data from url request and convert it to a cv2 image
-
-    img = np.asarray(bytearray(img_response.read()), dtype="uint8")
-    img = cv2.imdecode(img, cv2.IMREAD_COLOR)
-
-    # Rearrange cv2 from bgr to rgb
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    # Reshape the image to RGB format and onvert any background pixels to 0,0,0 so we can filter them later
-    reshape = img.reshape((img.shape[0] * img.shape[1], 3))
-    reshape[reshape < 16] = 0
-
-    # Use KNN to get top image colors
-    cluster = KMeans(n_clusters=num_colors).fit(reshape)
-    top_colors = get_top_colors(cluster, cluster.cluster_centers_)
-
-    #Once we have the top colors, return them
-    return top_colors
-
-# Gets the most dominant colors of an image using KMeans
-# @Param cluster: Number of colors(clusters)
-# @Param centroids: Center of each cluster used to group data
-# @Return color_list: List of ImgColor Objects
-def get_top_colors(cluster, centroids):
-    # Get the number of different clusters, create histogram, and normalize
-    labels = np.arange(0, len(np.unique(cluster.labels_)) + 1)
-    (hist, _) = np.histogram(cluster.labels_, bins=labels)
-    hist = hist.astype("float")
-    hist /= hist.sum()
-
-    color_list = []
-    # Create list of colors and their respective percentages
-    colors = sorted([(percent, color) for (percent, color) in zip(hist, centroids)])
-
-    # Since we are omitting any completely black pixels, count how many of the we omit and subtract that total from
-    # The total number of pixels in the image. Since we are always using 360x360 images we know the total amount is
-    # 360*360
-    new_pixels = (360 * 360) - (colors[-1][0] * 360 * 360)
-
-    # For every color, calculate the amount of pixels in the image and their relative percentage. Then create an
-    # ImgColor object and add it to our color_list
-    for (percent, color) in colors[:-1]:
-        count = percent * (360 * 360)
-        color_list.append(ImgColor(color, count, ((count / new_pixels) * 100)))
-
-    return color_list
+counts = ''
 
 
 # Prevent anything from running when imported
 def main():
     pass
 
+
 if __name__ == "__main__":
     main()
+
+
+
+# Shows image plots for all data corresponding to price to visualize relationships.
+def show_relationships():
+    skin_data = pd.read_csv('skindata.csv')
+    for column in skin_data.drop('curr_price', 1):
+        plt.xlabel(column)
+        plt.ylabel('Current Price')
+        plt.scatter(skin_data[column], skin_data['curr_price'])
+        plt.show()
+
+
+def get_colors():
+    return ['red', 'orange', 'yellow', 'green', 'blue', 'white', 'brown', 'cyan', 'gray', 'pink', 'darkslategray']
+
+
+def load_image(resp):
+    all_colors = False
+
+    # borrow a list of named colors from matplotlib
+    if not all_colors:
+        use_colors = {k: colors.cnames[k] for k in ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'white',
+                                                    'black', 'brown', 'cyan', 'gray', 'pink', 'darkslategray']}
+    else:
+        use_colors = colors.cnames
+
+    # translate hexstring to RGB tuple
+    named_colors = {k: tuple(map(int, (v[1:3], v[3:5], v[5:7]), 3 * (16,)))
+                    for k, v in use_colors.items()}
+    ncol = len(named_colors)
+
+    if not all_colors:
+        ncol -= 1
+        no_match = named_colors.pop('purple')
+    else:
+        no_match = named_colors['purple']
+
+    # make an array containing the RGB values
+    color_tuples = list(named_colors.values())
+    color_tuples.append(no_match)
+    color_tuples = np.array(color_tuples)
+
+    color_names = list(named_colors)
+    color_names.append('no match')
+
+    img = Image.open(BytesIO(resp.content))
+    img = img.convert('RGB')
+    img = np.array(img)
+
+    # build tree
+    tree = KDTree(color_tuples[:-1])
+    # tolerance for color match `inf` means use best match no matter how
+    # bad it may be
+    tolerance = np.inf
+    # find closest color in tree for each pixel in picture
+    dist, idx = tree.query(img, distance_upper_bound=tolerance)
+    # count and reattach names
+    counts = dict(zip(color_names, np.bincount(idx.ravel(), None, ncol + 1)))
+
+    counts.pop('black')
+    return counts
